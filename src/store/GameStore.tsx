@@ -630,16 +630,18 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
           const userId = state.auth.currentUser?.id;
           if (!userId) throw new Error('Usuário não autenticado.');
-          const next = apiKey?.trim() || undefined;
+          const trimmed = apiKey?.trim() || '';
+          const nextValue = trimmed ? trimmed : null;
+          const next = trimmed ? trimmed : undefined;
           const prev = state.settings.rawgApiKey;
           dispatch({ type: 'SET_API_KEY', apiKey: next });
           try {
-            await updateProfileSettings(userId, { rawgApiKey: next });
+            await updateProfileSettings(userId, { rawgApiKey: nextValue });
           } catch {
             try {
               const username = state.auth.currentUser?.username;
               if (username) {
-                await upsertProfileSettings(userId, username, { rawgApiKey: next });
+                await upsertProfileSettings(userId, username, { rawgApiKey: nextValue });
               } else {
                 throw new Error('username ausente');
               }
@@ -653,16 +655,18 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
           const userId = state.auth.currentUser?.id;
           if (!userId) throw new Error('Usuário não autenticado.');
-          const next = hltbBaseUrl?.trim() || undefined;
+          const trimmed = hltbBaseUrl?.trim() || '';
+          const nextValue = trimmed ? trimmed : null;
+          const next = trimmed ? trimmed : undefined;
           const prev = state.settings.hltbBaseUrl;
           dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: next });
           try {
-            await updateProfileSettings(userId, { hltbBaseUrl: next });
+            await updateProfileSettings(userId, { hltbBaseUrl: nextValue });
           } catch {
             try {
               const username = state.auth.currentUser?.username;
               if (username) {
-                await upsertProfileSettings(userId, username, { hltbBaseUrl: next });
+                await upsertProfileSettings(userId, username, { hltbBaseUrl: nextValue });
               } else {
                 throw new Error('username ausente');
               }

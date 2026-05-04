@@ -98,11 +98,15 @@ export async function upsertProfile(userId: string, username: string) {
   if (error) throw error;
 }
 
-export async function updateProfileSettings(userId: string, patch: { rawgApiKey?: string; hltbBaseUrl?: string }) {
-  const row = {
-    rawg_api_key: typeof patch.rawgApiKey === 'string' ? patch.rawgApiKey : null,
-    hltb_base_url: typeof patch.hltbBaseUrl === 'string' ? patch.hltbBaseUrl : null,
-  };
+export async function updateProfileSettings(
+  userId: string,
+  patch: { rawgApiKey?: string | null; hltbBaseUrl?: string | null },
+) {
+  const row: Record<string, string | null> = {};
+  if (patch.rawgApiKey !== undefined) row.rawg_api_key = patch.rawgApiKey;
+  if (patch.hltbBaseUrl !== undefined) row.hltb_base_url = patch.hltbBaseUrl;
+  if (!Object.keys(row).length) return;
+
   const { data, error } = await supabase.from('profiles').update(row).eq('id', userId).select('id');
   if (error) throw error;
   if (!data?.length) {
@@ -115,14 +119,11 @@ export async function updateProfileSettings(userId: string, patch: { rawgApiKey?
 export async function upsertProfileSettings(
   userId: string,
   username: string,
-  patch: { rawgApiKey?: string; hltbBaseUrl?: string },
+  patch: { rawgApiKey?: string | null; hltbBaseUrl?: string | null },
 ) {
-  const row: DbProfileRow = {
-    id: userId,
-    username,
-    rawg_api_key: typeof patch.rawgApiKey === 'string' ? patch.rawgApiKey : null,
-    hltb_base_url: typeof patch.hltbBaseUrl === 'string' ? patch.hltbBaseUrl : null,
-  };
+  const row: DbProfileRow = { id: userId, username };
+  if (patch.rawgApiKey !== undefined) row.rawg_api_key = patch.rawgApiKey;
+  if (patch.hltbBaseUrl !== undefined) row.hltb_base_url = patch.hltbBaseUrl;
   const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'id' });
   if (error) throw error;
 }
