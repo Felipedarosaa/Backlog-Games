@@ -22,9 +22,10 @@ import { notifyAchievementUnlocked } from '../notifications/achievementNotificat
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 import { hasSupabaseConfig, supabase } from '../api/supabase';
-import { applySyncEvent, getProfileUsername, isUsernameAvailable, pullAll, seedFromLocal, upsertProfile } from '../api/supabaseSync';
+import { applySyncEvent, getProfileUsername, isUsernameAvailable, pullAll, upsertProfile } from '../api/supabaseSync';
 
-const STORAGE_KEY = '@backlog_gamer_state_v1';
+const STORAGE_KEY_SETTINGS = '@backlog_gamer_settings_v1';
+const STORAGE_KEY_OUTBOX = '@backlog_gamer_outbox_v1';
 
 type Action =
   | { type: 'HYDRATE'; state: AppState }
@@ -72,7 +73,14 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SIGN_IN':
       return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: action.user } };
     case 'SIGN_OUT':
-      return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: undefined } };
+      return {
+        ...state,
+        auth: { ...(state.auth ?? { accounts: [] }), currentUser: undefined },
+        games: [],
+        lists: [],
+        achievementsUnlocked: [],
+        syncOutbox: [],
+      };
     case 'SET_AUTH_USER':
       return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: action.user } };
     case 'SET_API_KEY':
@@ -311,8 +319,9 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const stored = await getJson<AppState>(STORAGE_KEY);
-        const next = sanitizeState(stored) ?? initialState;
+        const storedSettings = await getJson<Pick<AppState, 'settings'>>(STORAGE_KEY_SETTINGS);
+        const storedOutbox = await getJson<Pick<AppState, 'syncOutbox'>>(STORAGE_KEY_OUTBOX);
+        const next = sanitizeState({ settings: storedSettings?.settings, syncOutbox: storedOutbox?.syncOutbox } as any) ?? initialState;
         if (!cancelled) {
           dispatch({ type: 'HYDRATE', state: next });
           setHydrated(true);
@@ -333,7 +342,8 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (!hasHydratedRef.current) return;
-    setJson(STORAGE_KEY, state).catch(() => {});
+    setJson(STORAGE_KEY_SETTINGS, { settings: state.settings }).catch(() => {});
+    setJson(STORAGE_KEY_OUTBOX, { syncOutbox: state.syncOutbox }).catch(() => {});
   }, [state]);
 
   useEffect(() => {
@@ -403,40 +413,14 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const cloud = await pullAll(userId);
         if (cancelled) return;
-
-        const cloudHasData = Boolean(cloud.games.length || cloud.lists.length || cloud.achievementsUnlocked.length);
-        const localHasData = Boolean(state.games.length || state.lists.length || state.achievementsUnlocked.length);
-        if (!cloudHasData && localHasData) {
-          await seedFromLocal(userId, {
-            games: state.games,
-            lists: state.lists,
-            achievementsUnlocked: state.achievementsUnlocked,
-          });
-          if (cancelled) return;
-          const seeded = await pullAll(userId);
-          if (cancelled) return;
-          dispatch({
-            type: 'HYDRATE',
-            state: {
-              ...state,
-              auth: { ...state.auth, currentUser: state.auth.currentUser },
-              games: seeded.games,
-              lists: seeded.lists,
-              achievementsUnlocked: seeded.achievementsUnlocked,
-              syncOutbox: state.syncOutbox,
-            },
-          });
-          return;
-        }
-
         dispatch({
           type: 'HYDRATE',
           state: {
             ...state,
             auth: { ...state.auth, currentUser: state.auth.currentUser },
-            games: cloud.games.length ? cloud.games : state.games,
-            lists: cloud.lists.length ? cloud.lists : state.lists,
-            achievementsUnlocked: cloud.achievementsUnlocked.length ? cloud.achievementsUnlocked : state.achievementsUnlocked,
+            games: cloud.games,
+            lists: cloud.lists,
+            achievementsUnlocked: cloud.achievementsUnlocked,
             syncOutbox: state.syncOutbox,
           },
         });
