@@ -258,6 +258,22 @@ function updateList(state: AppState, listId: string, map: (l: GameList) => GameL
   };
 }
 
+async function flushOutbox(userId: string, outbox: SyncEvent[], state: AppState) {
+  let remaining = outbox;
+  for (let i = 0; i < outbox.length; i++) {
+    const e = outbox[i];
+    try {
+      const op = cloudOpFromSyncEvent(e, state);
+      if (op) await applySyncEvent(userId, op);
+      remaining = outbox.slice(i + 1);
+    } catch {
+      remaining = outbox.slice(i);
+      break;
+    }
+  }
+  return remaining;
+}
+
 type Store = {
   state: AppState;
   actions: {
@@ -313,6 +329,10 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     setHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (!state.auth.currentUser?.id) cloudInitializedForUserRef.current = undefined;
+  }, [state.auth.currentUser?.id]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -415,18 +435,7 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
     flushingOutboxRef.current = true;
     let cancelled = false;
     void (async () => {
-      let remaining = state.syncOutbox;
-      for (let i = 0; i < state.syncOutbox.length; i++) {
-        const e = state.syncOutbox[i];
-        try {
-          const op = cloudOpFromSyncEvent(e, state);
-          if (op) await applySyncEvent(userId, op);
-          remaining = state.syncOutbox.slice(i + 1);
-        } catch {
-          remaining = state.syncOutbox.slice(i);
-          break;
-        }
-      }
+      const remaining = await flushOutbox(userId, state.syncOutbox, state);
       if (!cancelled) {
         dispatch({ type: 'SET_SYNC_OUTBOX', outbox: remaining });
       }
@@ -571,11 +580,17 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           return { ok: false, error: `Cadastro com ${provider.toUpperCase()} ainda não está configurado no Supabase.` };
         },
         signOut: async () => {
-          try {
-            if (hasSupabaseConfig()) await supabase.auth.signOut();
-          } finally {
-            dispatch({ type: 'SIGN_OUT' });
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          const userId = state.auth.currentUser?.id;
+          if (userId && isOnline === true && state.syncOutbox.length) {
+            const remaining = await flushOutbox(userId, state.syncOutbox, state);
+            dispatch({ type: 'SET_SYNC_OUTBOX', outbox: remaining });
+            if (remaining.length) {
+              throw new Error('Existem alterações pendentes. Conecte-se à internet e tente novamente.');
+            }
           }
+          await supabase.auth.signOut();
+          dispatch({ type: 'SIGN_OUT' });
         },
         setApiKey: async (apiKey) => {
           if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
@@ -658,7 +673,7 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
         },
       },
     };
-  }, [state]);
+  }, [state, isOnline]);
 
   if (!hydrated) {
     return (

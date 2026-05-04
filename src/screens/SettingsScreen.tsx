@@ -106,7 +106,19 @@ export function SettingsScreen() {
   function onSignOut() {
     Alert.alert('Sair da conta', 'Deseja deslogar desta conta neste dispositivo?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sair', style: 'destructive', onPress: () => void actions.signOut() },
+      {
+        text: 'Sair',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await actions.signOut();
+            } catch (e: any) {
+              Alert.alert('Falha ao sair', typeof e?.message === 'string' ? e.message : 'Tente novamente.');
+            }
+          })();
+        },
+      },
     ]);
   }
 
