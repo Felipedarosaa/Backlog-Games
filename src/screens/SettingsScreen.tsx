@@ -8,20 +8,14 @@ import { TextField } from '../components/TextField';
 import { Colors } from '../theme/colors';
 import { Metrics } from '../theme/metrics';
 import { useGameStore } from '../store/GameStore';
-import { rawgSearchGames } from '../api/rawg';
 
 export function SettingsScreen() {
   const { state, actions } = useGameStore();
-  const showRawgKey = __DEV__;
-  const [apiKey, setApiKey] = useState(state.settings.rawgApiKey ?? '');
   const [hltbBaseUrl, setHltbBaseUrl] = useState(state.settings.hltbBaseUrl ?? '');
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [testingHltb, setTestingHltb] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>();
   const [hltbError, setHltbError] = useState<string | undefined>();
-  const [testResult, setTestResult] = useState<string | undefined>();
   const [hltbTestResult, setHltbTestResult] = useState<string | undefined>();
 
   useEffect(() => {
@@ -33,34 +27,14 @@ export function SettingsScreen() {
   }, []);
 
   async function onSave() {
-    setError(undefined);
-    setTestResult(undefined);
     setSaving(true);
     try {
       await actions.setHltbBaseUrl(hltbBaseUrl.trim() ? hltbBaseUrl.trim() : undefined);
-      if (showRawgKey) {
-        await actions.setApiKey(apiKey.trim() ? apiKey.trim() : undefined);
-      }
-      setTestResult('Salvo no Supabase.');
+      Alert.alert('Salvo', 'Configurações salvas no Supabase.');
     } catch {
-      setError('Falha ao salvar.');
+      Alert.alert('Falha ao salvar', 'Tente novamente.');
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function onTest() {
-    setError(undefined);
-    setTestResult(undefined);
-    setTesting(true);
-    try {
-      const key = apiKey.trim();
-      const results = await rawgSearchGames('Hollow Knight', showRawgKey && key ? key : undefined);
-      setTestResult(results.length ? `OK: "${results[0].name}" (top 1 de ${results.length})` : 'OK: sem resultados.');
-    } catch (e: any) {
-      setError(typeof e?.message === 'string' ? e.message : 'Falha ao testar a API.');
-    } finally {
-      setTesting(false);
     }
   }
 
@@ -174,52 +148,6 @@ export function SettingsScreen() {
       </Card>
 
       <Card style={styles.card}>
-        <ThemedText variant="subtitle">RAWG</ThemedText>
-        <ThemedText variant="muted" style={{ marginTop: 8 }}>
-          No app publicado, a integração usa um proxy via Supabase (Edge Function), sem expor a chave no app.
-        </ThemedText>
-
-        <View style={{ height: 14 }} />
-
-        {showRawgKey ? (
-          <TextField
-            label="Chave (apenas dev)"
-            value={apiKey}
-            onChangeText={(t) => {
-              setApiKey(t);
-              setError(undefined);
-            }}
-            placeholder="Cole sua RAWG API Key aqui"
-            autoCapitalize="none"
-            autoCorrect={false}
-            secureTextEntry={false}
-            error={error}
-          />
-        ) : (
-          <ThemedText variant="muted">Configurado no servidor.</ThemedText>
-        )}
-
-        {testResult ? (
-          <ThemedText variant="muted" style={{ marginTop: 10 }}>
-            {testResult}
-          </ThemedText>
-        ) : null}
-
-        <View style={{ height: 14 }} />
-
-        <View style={styles.row}>
-          <ThemedButton label={saving ? 'SALVANDO…' : 'SALVAR'} onPress={onSave} disabled={saving} />
-          <ThemedButton label="TESTAR API" variant="secondary" onPress={onTest} disabled={testing} />
-        </View>
-
-        {testing ? (
-          <View style={{ marginTop: 12, alignItems: 'center' }}>
-            <ActivityIndicator color={Colors.accent2} />
-          </View>
-        ) : null}
-      </Card>
-
-      <Card style={styles.card}>
         <ThemedText variant="subtitle">HowLongToBeat (HLTB)</ThemedText>
         <ThemedText variant="muted" style={{ marginTop: 8 }}>
           Para buscar estimativas automaticamente, informe a URL base de um proxy compatível com endpoints /api/search e
@@ -250,6 +178,7 @@ export function SettingsScreen() {
         <View style={{ height: 14 }} />
 
         <View style={styles.row}>
+          <ThemedButton label={saving ? 'SALVANDO…' : 'SALVAR'} onPress={onSave} disabled={saving} />
           <ThemedButton label="TESTAR HLTB" variant="secondary" onPress={onTestHltb} disabled={testingHltb} />
         </View>
 
