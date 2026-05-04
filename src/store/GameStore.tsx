@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
 import type {
   AchievementUnlock,
   AppState,
-  AuthAccount,
   AuthUser,
   GameEntry,
   GameList,
@@ -21,14 +21,15 @@ import { getAchievementById, getUnlockedAchievementIds } from '../features/achie
 import { notifyAchievementUnlocked } from '../notifications/achievementNotifications';
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
+import { hasSupabaseConfig, supabase } from '../api/supabase';
 
 const STORAGE_KEY = '@backlog_gamer_state_v1';
 
 type Action =
   | { type: 'HYDRATE'; state: AppState }
-  | { type: 'SIGN_UP'; account: AuthAccount; user: AuthUser }
   | { type: 'SIGN_IN'; user: AuthUser }
   | { type: 'SIGN_OUT' }
+  | { type: 'SET_AUTH_USER'; user: AuthUser | undefined }
   | { type: 'SET_API_KEY'; apiKey: string | undefined }
   | { type: 'SET_HLTB_BASE_URL'; hltbBaseUrl: string | undefined }
   | { type: 'ADD_GAME'; game: GameEntry }
@@ -66,18 +67,12 @@ function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'HYDRATE':
       return action.state;
-    case 'SIGN_UP':
-      return {
-        ...state,
-        auth: {
-          currentUser: action.user,
-          accounts: [action.account, ...(state.auth?.accounts ?? [])],
-        },
-      };
     case 'SIGN_IN':
       return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: action.user } };
     case 'SIGN_OUT':
       return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: undefined } };
+    case 'SET_AUTH_USER':
+      return { ...state, auth: { ...(state.auth ?? { accounts: [] }), currentUser: action.user } };
     case 'SET_API_KEY':
       return { ...state, settings: { ...state.settings, rawgApiKey: action.apiKey } };
     case 'SET_HLTB_BASE_URL':
@@ -247,11 +242,19 @@ function updateList(state: AppState, listId: string, map: (l: GameList) => GameL
 type Store = {
   state: AppState;
   actions: {
-    signUp: (username: string, email: string, password: string, confirmPassword: string) => { ok: true } | { ok: false; error: string };
-    signIn: (email: string, password: string) => { ok: true } | { ok: false; error: string };
-    signInWithProvider: (provider: 'google' | 'psn' | 'steam') => { ok: true } | { ok: false; error: string };
-    signUpWithProvider: (provider: 'google' | 'psn' | 'steam', username: string) => { ok: true } | { ok: false; error: string };
-    signOut: () => void;
+    signUp: (
+      username: string,
+      email: string,
+      password: string,
+      confirmPassword: string,
+    ) => Promise<{ ok: true; message?: string } | { ok: false; error: string }>;
+    signIn: (email: string, password: string) => Promise<{ ok: true } | { ok: false; error: string }>;
+    signInWithProvider: (provider: 'google' | 'psn' | 'steam') => Promise<{ ok: true } | { ok: false; error: string }>;
+    signUpWithProvider: (
+      provider: 'google' | 'psn' | 'steam',
+      username: string,
+    ) => Promise<{ ok: true } | { ok: false; error: string }>;
+    signOut: () => Promise<void>;
     setApiKey: (apiKey: string | undefined) => void;
     setHltbBaseUrl: (hltbBaseUrl: string | undefined) => void;
     addGame: (game: GameEntry) => void;
@@ -317,6 +320,30 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   }, [state]);
 
   useEffect(() => {
+    if (!hydrated) return;
+    if (!hasSupabaseConfig()) return;
+    let cancelled = false;
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const user = data.session?.user ? authUserFromSupabaseUser(data.session.user) : undefined;
+        dispatch({ type: 'SET_AUTH_USER', user });
+      })
+      .catch(() => {});
+
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user ? authUserFromSupabaseUser(session.user) : undefined;
+      dispatch({ type: 'SET_AUTH_USER', user });
+    });
+
+    return () => {
+      cancelled = true;
+      data.subscription.unsubscribe();
+    };
+  }, [hydrated]);
+
+  useEffect(() => {
     const sub = NetInfo.addEventListener((s) => {
       const next = Boolean(s.isConnected && (s.isInternetReachable ?? true));
       setIsOnline(next);
@@ -378,7 +405,8 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
     return {
       state,
       actions: {
-        signUp: (username, email, password, confirmPassword) => {
+        signUp: async (username, email, password, confirmPassword) => {
+          if (!hasSupabaseConfig()) return { ok: false, error: 'Configure o Supabase (.env) para habilitar login/cadastro.' };
           const normalizedUsername = normalizeUsername(username);
           if (!normalizedUsername) return { ok: false, error: 'Informe um nome de usuário (3 a 20 caracteres).' };
           const normalizedEmail = normalizeEmail(email);
@@ -388,80 +416,46 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           if (pass.length < 6) return { ok: false, error: 'A senha precisa ter pelo menos 6 caracteres.' };
           if (pass !== confirm) return { ok: false, error: 'As senhas não conferem.' };
 
-          const existsEmail = (state.auth?.accounts ?? []).some(
-            (a) => a.provider === 'email' && (a.email ?? '').toLowerCase() === normalizedEmail.toLowerCase()
-          );
-          if (existsEmail) return { ok: false, error: 'Já existe uma conta com esse e-mail.' };
-
-          const existsUsername = (state.auth?.accounts ?? []).some(
-            (a) => a.username.toLowerCase() === normalizedUsername.toLowerCase()
-          );
-          if (existsUsername) return { ok: false, error: 'Esse nome de usuário já está em uso.' };
-
-          const account: AuthAccount = {
-            id: makeId('user'),
-            provider: 'email',
-            username: normalizedUsername,
+          const { data, error } = await supabase.auth.signUp({
             email: normalizedEmail,
-            passwordHash: hashPassword(pass),
-            createdAtISO: nowISO(),
-          };
-          const user: AuthUser = { id: account.id, provider: 'email', email: account.email, username: account.username };
-          dispatch({ type: 'SIGN_UP', account, user });
-          return { ok: true };
+            password: pass,
+            options: { data: { username: normalizedUsername } },
+          });
+          if (error) return { ok: false, error: error.message };
+
+          if (data.session?.user) {
+            dispatch({ type: 'SIGN_IN', user: authUserFromSupabaseUser(data.session.user) });
+            return { ok: true };
+          }
+
+          return { ok: true, message: 'Conta criada. Verifique seu e-mail para confirmar o cadastro e depois faça login.' };
         },
-        signIn: (email, password) => {
+        signIn: async (email, password) => {
+          if (!hasSupabaseConfig()) return { ok: false, error: 'Configure o Supabase (.env) para habilitar login.' };
           const normalizedEmail = normalizeEmail(email);
           if (!normalizedEmail) return { ok: false, error: 'Informe um e-mail válido.' };
           const pass = String(password ?? '');
-          const accounts = state.auth?.accounts ?? [];
-          const found = accounts.find((a) => a.provider === 'email' && (a.email ?? '').toLowerCase() === normalizedEmail.toLowerCase());
-          if (!found) return { ok: false, error: 'Conta não encontrada.' };
-          if ((found.passwordHash ?? '') !== hashPassword(pass)) return { ok: false, error: 'Senha incorreta.' };
-          dispatch({ type: 'SIGN_IN', user: { id: found.id, provider: 'email', email: found.email, username: found.username } });
+          const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: pass });
+          if (error) return { ok: false, error: error.message };
+          if (!data.session?.user) return { ok: false, error: 'Falha ao criar sessão.' };
+          dispatch({ type: 'SIGN_IN', user: authUserFromSupabaseUser(data.session.user) });
           return { ok: true };
         },
-        signInWithProvider: (provider) => {
-          const accounts = state.auth?.accounts ?? [];
-          const matches = accounts.filter((a) => a.provider === provider);
-          if (matches.length === 0) {
-            return { ok: false, error: 'Conta não encontrada. Vá em "Criar conta" para cadastrar seu nome de usuário.' };
-          }
-          if (matches.length > 1) {
-            return { ok: false, error: 'Há mais de uma conta desse provedor neste dispositivo. Use e-mail/senha.' };
-          }
-          const existing = matches[0];
-          dispatch({
-            type: 'SIGN_IN',
-            user: { id: existing.id, provider, username: existing.username, email: existing.email },
-          });
-          return { ok: true };
+        signInWithProvider: async (provider) => {
+          return { ok: false, error: `Login com ${provider.toUpperCase()} ainda não está configurado no Supabase.` };
         },
-        signUpWithProvider: (provider, username) => {
+        signUpWithProvider: async (provider, username) => {
           const normalizedUsername = normalizeUsername(username);
           if (!normalizedUsername) return { ok: false, error: 'Informe um nome de usuário (3 a 20 caracteres).' };
-
-          const accounts = state.auth?.accounts ?? [];
-          const providerAlreadyExists = accounts.some((a) => a.provider === provider);
-          if (providerAlreadyExists) return { ok: false, error: 'Esse provedor já está cadastrado neste dispositivo. Use Login.' };
-
-          const usernameTaken = accounts.some((a) => a.username.toLowerCase() === normalizedUsername.toLowerCase());
-          if (usernameTaken) return { ok: false, error: 'Esse nome de usuário já está em uso.' };
-
-          const account: AuthAccount = {
-            id: makeId('user'),
-            provider,
-            username: normalizedUsername,
-            createdAtISO: nowISO(),
-          };
-          dispatch({
-            type: 'SIGN_UP',
-            account,
-            user: { id: account.id, provider, username: account.username },
-          });
-          return { ok: true };
+          return { ok: false, error: `Cadastro com ${provider.toUpperCase()} ainda não está configurado no Supabase.` };
         },
-        signOut: () => dispatch({ type: 'SIGN_OUT' }),
+        signOut: async () => {
+          try {
+            if (hasSupabaseConfig()) await supabase.auth.signOut();
+          } finally {
+            dispatch({ type: 'SIGN_OUT' });
+          }
+        },
         setApiKey: (apiKey) => dispatch({ type: 'SET_API_KEY', apiKey: apiKey?.trim() || undefined }),
         setHltbBaseUrl: (hltbBaseUrl) =>
           dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: hltbBaseUrl?.trim() || undefined }),
@@ -512,42 +506,41 @@ export function useGameStore() {
   return v;
 }
 
+function authUserFromSupabaseUser(user: SupabaseUser): AuthUser {
+  const email = typeof user.email === 'string' ? user.email : undefined;
+  const rawProvider = (user as any)?.app_metadata?.provider;
+  const provider = normalizeSupabaseProvider(rawProvider);
+  const metaUsername = (user as any)?.user_metadata?.username;
+  const username =
+    typeof metaUsername === 'string' && metaUsername.trim()
+      ? metaUsername.trim()
+      : email
+        ? fallbackUsernameFromEmail(email)
+        : 'user';
+  return { id: user.id, provider, username, email };
+}
+
+function normalizeSupabaseProvider(provider: unknown): AuthUser['provider'] {
+  switch (provider) {
+    case 'google':
+      return 'google';
+    case 'steam':
+      return 'steam';
+    default:
+      return 'email';
+  }
+}
+
+function fallbackUsernameFromEmail(email: string) {
+  const v = String(email ?? '').trim();
+  const at = v.indexOf('@');
+  const local = at > 0 ? v.slice(0, at) : v;
+  const cleaned = local.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 20);
+  return cleaned.length >= 3 ? cleaned : 'user';
+}
+
 function sanitizeState(state: AppState | undefined) {
   if (!state) return undefined;
-  const auth = (state as any).auth;
-  const accounts = Array.isArray(auth?.accounts)
-    ? (auth.accounts as any[])
-        .filter((a) => Boolean(a && typeof a.id === 'string'))
-        .map((a) => ({
-          id: String(a.id),
-          provider: normalizeProvider((a as any).provider),
-          username:
-            typeof a.username === 'string'
-              ? String(a.username)
-              : typeof a.email === 'string'
-                ? fallbackUsernameFromEmail(String(a.email))
-                : '',
-          email: typeof a.email === 'string' ? String(a.email) : undefined,
-          passwordHash: typeof a.passwordHash === 'string' ? String(a.passwordHash) : undefined,
-          createdAtISO: typeof a.createdAtISO === 'string' ? a.createdAtISO : nowISO(),
-        }))
-    : [];
-  const currentUser =
-    auth?.currentUser &&
-    typeof auth.currentUser === 'object' &&
-    typeof auth.currentUser.id === 'string'
-      ? {
-          id: String(auth.currentUser.id),
-          provider: normalizeProvider((auth.currentUser as any).provider),
-          username:
-            typeof (auth.currentUser as any).username === 'string'
-              ? String((auth.currentUser as any).username)
-              : typeof (auth.currentUser as any).email === 'string'
-                ? fallbackUsernameFromEmail(String((auth.currentUser as any).email))
-                : '',
-          email: typeof (auth.currentUser as any).email === 'string' ? String((auth.currentUser as any).email) : undefined,
-        }
-      : undefined;
 
   const games = Array.isArray(state.games) ? state.games : [];
   const safeGames = games
@@ -598,8 +591,8 @@ function sanitizeState(state: AppState | undefined) {
 
   return {
     auth: {
-      accounts: accounts.filter((a) => Boolean(a.username)),
-      currentUser: currentUser && currentUser.username ? currentUser : undefined,
+      accounts: [],
+      currentUser: undefined,
     },
     settings: { ...(state.settings ?? {}), rawgApiKey, hltbBaseUrl },
     games: safeGames,
@@ -623,40 +616,6 @@ function normalizeUsername(username: string) {
   const ok = /^[A-Za-z0-9_]+$/.test(v);
   if (!ok) return undefined;
   return v;
-}
-
-function fallbackUsernameFromEmail(email: string) {
-  const v = String(email ?? '').trim();
-  const at = v.indexOf('@');
-  const local = at > 0 ? v.slice(0, at) : v;
-  const cleaned = local.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 20);
-  return cleaned.length >= 3 ? cleaned : 'user';
-}
-
-function normalizeProvider(provider: unknown): AuthAccount['provider'] {
-  switch (provider) {
-    case 'email':
-    case 'google':
-    case 'psn':
-    case 'steam':
-      return provider;
-    default:
-      return 'email';
-  }
-}
-
-function hashPassword(password: string) {
-  let h1 = 0xdeadbeef ^ password.length;
-  let h2 = 0x41c6ce57 ^ password.length;
-  for (let i = 0; i < password.length; i++) {
-    const ch = password.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  const x = (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
-  return x;
 }
 
 function sanitizeHltb(input: any): HltbTimes | undefined {

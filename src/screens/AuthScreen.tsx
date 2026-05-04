@@ -23,23 +23,34 @@ export function AuthScreen() {
   const [password, setPassword] = React.useState('');
   const [showPassword, setShowPassword] = React.useState(false);
   const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | undefined>(undefined);
+  const [notice, setNotice] = React.useState<string | undefined>(undefined);
 
   React.useEffect(() => {
     setError(undefined);
+    setNotice(undefined);
   }, [mode]);
 
   const primaryLabel = mode === 'signIn' ? 'Entrar' : 'Criar conta';
 
-  const submit = () => {
+  const submit = async () => {
+    if (submitting) return;
     setError(undefined);
-    if (mode === 'signIn') {
-      const res = actions.signIn(email, password);
+    setNotice(undefined);
+    setSubmitting(true);
+    try {
+      if (mode === 'signIn') {
+        const res = await actions.signIn(email, password);
+        if (!res.ok) setError(res.error);
+        return;
+      }
+      const res = await actions.signUp(username, email, password, confirmPassword);
       if (!res.ok) setError(res.error);
-      return;
+      if (res.ok && res.message) setNotice(res.message);
+    } finally {
+      setSubmitting(false);
     }
-    const res = actions.signUp(username, email, password, confirmPassword);
-    if (!res.ok) setError(res.error);
   };
 
   return (
@@ -131,7 +142,7 @@ export function AuthScreen() {
                 autoCorrect={false}
                 placeholder="••••••"
                 returnKeyType={mode === 'signIn' ? 'go' : 'next'}
-                onSubmitEditing={mode === 'signIn' ? submit : undefined}
+                onSubmitEditing={mode === 'signIn' ? () => void submit() : undefined}
               />
               {mode === 'signUp' ? (
                 <TextField
@@ -144,7 +155,7 @@ export function AuthScreen() {
                   autoCorrect={false}
                   placeholder="••••••"
                   returnKeyType="go"
-                  onSubmitEditing={submit}
+                  onSubmitEditing={() => void submit()}
                 />
               ) : null}
 
@@ -153,10 +164,16 @@ export function AuthScreen() {
                   {error}
                 </ThemedText>
               ) : null}
+              {notice ? (
+                <ThemedText variant="muted" style={styles.notice}>
+                  {notice}
+                </ThemedText>
+              ) : null}
 
               <ThemedButton
                 label={primaryLabel}
                 onPress={submit}
+                disabled={submitting}
                 left={
                   <Ionicons
                     name={mode === 'signIn' ? 'log-in-outline' : 'person-add-outline'}
@@ -176,13 +193,21 @@ export function AuthScreen() {
 
               <View style={styles.providerRow}>
                 <Pressable
-                  onPress={() => {
+                  disabled={submitting}
+                  onPress={async () => {
+                    if (submitting) return;
                     setError(undefined);
-                    const res =
-                      mode === 'signIn'
-                        ? actions.signInWithProvider('google')
-                        : actions.signUpWithProvider('google', username);
-                    if (!res.ok) setError(res.error);
+                    setNotice(undefined);
+                    setSubmitting(true);
+                    try {
+                      const res =
+                        mode === 'signIn'
+                          ? await actions.signInWithProvider('google')
+                          : await actions.signUpWithProvider('google', username);
+                      if (!res.ok) setError(res.error);
+                    } finally {
+                      setSubmitting(false);
+                    }
                   }}
                   hitSlop={10}
                   style={({ pressed }) => [
@@ -194,13 +219,21 @@ export function AuthScreen() {
                   <Image source={{ uri: GOOGLE_ICON_URI }} style={styles.googleIcon} />
                 </Pressable>
                 <Pressable
-                  onPress={() => {
+                  disabled={submitting}
+                  onPress={async () => {
+                    if (submitting) return;
                     setError(undefined);
-                    const res =
-                      mode === 'signIn'
-                        ? actions.signInWithProvider('psn')
-                        : actions.signUpWithProvider('psn', username);
-                    if (!res.ok) setError(res.error);
+                    setNotice(undefined);
+                    setSubmitting(true);
+                    try {
+                      const res =
+                        mode === 'signIn'
+                          ? await actions.signInWithProvider('psn')
+                          : await actions.signUpWithProvider('psn', username);
+                      if (!res.ok) setError(res.error);
+                    } finally {
+                      setSubmitting(false);
+                    }
                   }}
                   hitSlop={10}
                   style={({ pressed }) => [styles.providerCircle, pressed ? styles.providerCirclePressed : undefined]}
@@ -215,13 +248,21 @@ export function AuthScreen() {
                   <Ionicons name="logo-playstation" size={24} color="#FFFFFF" />
                 </Pressable>
                 <Pressable
-                  onPress={() => {
+                  disabled={submitting}
+                  onPress={async () => {
+                    if (submitting) return;
                     setError(undefined);
-                    const res =
-                      mode === 'signIn'
-                        ? actions.signInWithProvider('steam')
-                        : actions.signUpWithProvider('steam', username);
-                    if (!res.ok) setError(res.error);
+                    setNotice(undefined);
+                    setSubmitting(true);
+                    try {
+                      const res =
+                        mode === 'signIn'
+                          ? await actions.signInWithProvider('steam')
+                          : await actions.signUpWithProvider('steam', username);
+                      if (!res.ok) setError(res.error);
+                    } finally {
+                      setSubmitting(false);
+                    }
                   }}
                   hitSlop={10}
                   style={({ pressed }) => [styles.providerCircle, pressed ? styles.providerCirclePressed : undefined]}
@@ -337,6 +378,10 @@ const styles = StyleSheet.create({
   },
   error: {
     color: Colors.danger,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  notice: {
     textAlign: 'center',
     marginTop: 2,
   },

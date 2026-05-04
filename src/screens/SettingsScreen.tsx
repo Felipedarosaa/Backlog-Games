@@ -106,7 +106,7 @@ export function SettingsScreen() {
   function onSignOut() {
     Alert.alert('Sair da conta', 'Deseja deslogar desta conta neste dispositivo?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Sair', style: 'destructive', onPress: () => actions.signOut() },
+      { text: 'Sair', style: 'destructive', onPress: () => void actions.signOut() },
     ]);
   }
 
