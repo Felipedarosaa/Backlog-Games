@@ -103,7 +103,27 @@ export async function updateProfileSettings(userId: string, patch: { rawgApiKey?
     rawg_api_key: typeof patch.rawgApiKey === 'string' ? patch.rawgApiKey : null,
     hltb_base_url: typeof patch.hltbBaseUrl === 'string' ? patch.hltbBaseUrl : null,
   };
-  const { error } = await supabase.from('profiles').update(row).eq('id', userId);
+  const { data, error } = await supabase.from('profiles').update(row).eq('id', userId).select('id');
+  if (error) throw error;
+  if (!data?.length) {
+    throw new Error(
+      'Perfil não encontrado no Supabase (profiles). Verifique se existe uma linha em public.profiles com id = auth.users.id.',
+    );
+  }
+}
+
+export async function upsertProfileSettings(
+  userId: string,
+  username: string,
+  patch: { rawgApiKey?: string; hltbBaseUrl?: string },
+) {
+  const row: DbProfileRow = {
+    id: userId,
+    username,
+    rawg_api_key: typeof patch.rawgApiKey === 'string' ? patch.rawgApiKey : null,
+    hltb_base_url: typeof patch.hltbBaseUrl === 'string' ? patch.hltbBaseUrl : null,
+  };
+  const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'id' });
   if (error) throw error;
 }
 

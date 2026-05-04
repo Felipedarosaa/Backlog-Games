@@ -21,7 +21,15 @@ import { notifyAchievementUnlocked } from '../notifications/achievementNotificat
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 import { hasSupabaseConfig, supabase } from '../api/supabase';
-import { applySyncEvent, getProfile, isUsernameAvailable, pullAll, updateProfileSettings, upsertProfile } from '../api/supabaseSync';
+import {
+  applySyncEvent,
+  getProfile,
+  isUsernameAvailable,
+  pullAll,
+  updateProfileSettings,
+  upsertProfile,
+  upsertProfileSettings,
+} from '../api/supabaseSync';
 
 type Action =
   | { type: 'HYDRATE'; state: AppState }
@@ -628,8 +636,17 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           try {
             await updateProfileSettings(userId, { rawgApiKey: next });
           } catch {
-            dispatch({ type: 'SET_API_KEY', apiKey: prev });
-            throw new Error('Falha ao salvar no Supabase.');
+            try {
+              const username = state.auth.currentUser?.username;
+              if (username) {
+                await upsertProfileSettings(userId, username, { rawgApiKey: next });
+              } else {
+                throw new Error('username ausente');
+              }
+            } catch {
+              dispatch({ type: 'SET_API_KEY', apiKey: prev });
+              throw new Error('Falha ao salvar no Supabase.');
+            }
           }
         },
         setHltbBaseUrl: async (hltbBaseUrl) => {
@@ -642,8 +659,17 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           try {
             await updateProfileSettings(userId, { hltbBaseUrl: next });
           } catch {
-            dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: prev });
-            throw new Error('Falha ao salvar no Supabase.');
+            try {
+              const username = state.auth.currentUser?.username;
+              if (username) {
+                await upsertProfileSettings(userId, username, { hltbBaseUrl: next });
+              } else {
+                throw new Error('username ausente');
+              }
+            } catch {
+              dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: prev });
+              throw new Error('Falha ao salvar no Supabase.');
+            }
           }
         },
         addGame: (game) => dispatch({ type: 'ADD_GAME', game }),
