@@ -107,12 +107,43 @@ export function SettingsScreen() {
     Alert.alert('Sair da conta', 'Deseja deslogar desta conta neste dispositivo?', [
       { text: 'Cancelar', style: 'cancel' },
       {
+        text: 'Sincronizar',
+        onPress: () => {
+          void (async () => {
+            try {
+              await actions.syncNow();
+              Alert.alert('Sincronizado', 'Fila enviada com sucesso.');
+            } catch (e: any) {
+              Alert.alert('Falha ao sincronizar', typeof e?.message === 'string' ? e.message : 'Tente novamente.');
+            }
+          })();
+        },
+      },
+      {
         text: 'Sair',
         style: 'destructive',
         onPress: () => {
           void (async () => {
             try {
               await actions.signOut();
+            } catch (e: any) {
+              Alert.alert(
+                'Não foi possível sair',
+                typeof e?.message === 'string'
+                  ? e.message
+                  : 'Existem alterações pendentes. Sincronize ou limpe a fila.',
+              );
+            }
+          })();
+        },
+      },
+      {
+        text: 'Forçar saída',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await actions.forceSignOut();
             } catch (e: any) {
               Alert.alert('Falha ao sair', typeof e?.message === 'string' ? e.message : 'Tente novamente.');
             }
@@ -251,7 +282,24 @@ export function SettingsScreen() {
           </View>
         </View>
         <View style={{ height: 12 }} />
-        <ThemedButton label="LIMPAR FILA" variant="secondary" onPress={onClearOutbox} disabled={!state.syncOutbox.length} />
+        <View style={styles.row}>
+          <ThemedButton
+            label="SINCRONIZAR"
+            variant="secondary"
+            onPress={() => {
+              void (async () => {
+                try {
+                  await actions.syncNow();
+                  Alert.alert('Sincronizado', 'Fila enviada com sucesso.');
+                } catch (e: any) {
+                  Alert.alert('Falha ao sincronizar', typeof e?.message === 'string' ? e.message : 'Tente novamente.');
+                }
+              })();
+            }}
+            disabled={!state.syncOutbox.length || isOnline === false}
+          />
+          <ThemedButton label="LIMPAR FILA" variant="secondary" onPress={onClearOutbox} disabled={!state.syncOutbox.length} />
+        </View>
       </Card>
     </ScrollView>
   );

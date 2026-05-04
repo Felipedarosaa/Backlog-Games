@@ -290,6 +290,8 @@ type Store = {
       username: string,
     ) => Promise<{ ok: true } | { ok: false; error: string }>;
     signOut: () => Promise<void>;
+    forceSignOut: () => Promise<void>;
+    syncNow: () => Promise<void>;
     setApiKey: (apiKey: string | undefined) => Promise<void>;
     setHltbBaseUrl: (hltbBaseUrl: string | undefined) => Promise<void>;
     addGame: (game: GameEntry) => void;
@@ -586,11 +588,35 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
             const remaining = await flushOutbox(userId, state.syncOutbox, state);
             dispatch({ type: 'SET_SYNC_OUTBOX', outbox: remaining });
             if (remaining.length) {
-              throw new Error('Existem alterações pendentes. Conecte-se à internet e tente novamente.');
+              throw new Error(
+                `Não foi possível sincronizar ${remaining.length} alteração(ões). Verifique sua internet e as policies do Supabase, ou limpe a fila para sair.`,
+              );
             }
           }
           await supabase.auth.signOut();
           dispatch({ type: 'SIGN_OUT' });
+        },
+        forceSignOut: async () => {
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          try {
+            await supabase.auth.signOut();
+          } finally {
+            dispatch({ type: 'SIGN_OUT' });
+          }
+        },
+        syncNow: async () => {
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          const userId = state.auth.currentUser?.id;
+          if (!userId) throw new Error('Usuário não autenticado.');
+          if (isOnline !== true) throw new Error('Você está offline.');
+          if (!state.syncOutbox.length) return;
+          const remaining = await flushOutbox(userId, state.syncOutbox, state);
+          dispatch({ type: 'SET_SYNC_OUTBOX', outbox: remaining });
+          if (remaining.length) {
+            throw new Error(
+              `Ainda existem ${remaining.length} alteração(ões) pendente(s). Verifique as policies (RLS) das tabelas no Supabase.`,
+            );
+          }
         },
         setApiKey: async (apiKey) => {
           if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
