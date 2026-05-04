@@ -18,7 +18,6 @@ type Props = NativeStackScreenProps<AddStackParamList, 'AddGame'>;
 
 export function AddGameScreen({ navigation }: Props) {
   const { state, actions } = useGameStore();
-  const apiKey = state.settings.rawgApiKey;
 
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | undefined>(undefined);
@@ -41,13 +40,9 @@ export function AddGameScreen({ navigation }: Props) {
       setError(v.message);
       return;
     }
-    if (!apiKey) {
-      setError('Configure sua RAWG API Key nas Configurações para buscar jogos.');
-      return;
-    }
     setLoading(true);
     try {
-      const list = await rawgSearchGames(v.value, apiKey);
+      const list = await rawgSearchGames(v.value);
       setResults(list);
       if (list.length === 0) setError('Nenhum jogo encontrado. Tente outro termo.');
     } catch (e) {
@@ -59,14 +54,10 @@ export function AddGameScreen({ navigation }: Props) {
   }
 
   async function onSelect(rawgId: number) {
-    if (!apiKey) {
-      setError('Configure sua RAWG API Key nas Configurações para adicionar jogos.');
-      return;
-    }
     setError(undefined);
     setAddingId(rawgId);
     try {
-      const details = await rawgGetGameDetails(rawgId, apiKey);
+      const details = await rawgGetGameDetails(rawgId);
       setSelected(details);
       setPlatform('');
       setPlatformCustom('');

@@ -1,3 +1,5 @@
+import { hasSupabaseConfig, supabase } from './supabase';
+
 export type RawgGameSearchItem = {
   id: number;
   name: string;
@@ -28,20 +30,38 @@ export class RawgError extends Error {
 const BASE_URL = 'https://api.rawg.io/api';
 
 export async function rawgSearchGames(query: string, apiKey?: string) {
-  if (!apiKey) throw new RawgError('NO_API_KEY', 'Configure sua RAWG API Key nas Configurações.');
-  const url = `${BASE_URL}/games?key=${encodeURIComponent(apiKey)}&search=${encodeURIComponent(
-    query,
-  )}&page_size=10&search_precise=true`;
-  const data = await fetchJson<RawgSearchResponse>(url);
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  if (apiKey) {
+    const url = `${BASE_URL}/games?key=${encodeURIComponent(apiKey)}&search=${encodeURIComponent(
+      q,
+    )}&page_size=10&search_precise=true`;
+    const data = await fetchJson<RawgSearchResponse>(url);
+    return data.results ?? [];
+  }
+  const data = await invokeProxy<RawgSearchResponse>({ action: 'search', query: q });
   return data.results ?? [];
 }
 
 export async function rawgGetGameDetails(rawgId: number, apiKey?: string) {
-  if (!apiKey) throw new RawgError('NO_API_KEY', 'Configure sua RAWG API Key nas Configurações.');
-  const url = `${BASE_URL}/games/${rawgId}?key=${encodeURIComponent(apiKey)}`;
-  const data = await fetchJson<RawgGameDetails>(url);
+  const id = Number(rawgId);
+  if (!Number.isFinite(id)) throw new RawgError('BAD_RESPONSE', 'ID inválido.');
+  if (apiKey) {
+    const url = `${BASE_URL}/games/${id}?key=${encodeURIComponent(apiKey)}`;
+    const data = await fetchJson<RawgGameDetails>(url);
+    if (!data?.id) throw new RawgError('NOT_FOUND', 'Jogo não encontrado na API.');
+    return data;
+  }
+  const data = await invokeProxy<RawgGameDetails>({ action: 'details', rawgId: id });
   if (!data?.id) throw new RawgError('NOT_FOUND', 'Jogo não encontrado na API.');
   return data;
+}
+
+async function invokeProxy<T>(body: { action: 'search'; query: string } | { action: 'details'; rawgId: number }) {
+  if (!hasSupabaseConfig()) throw new RawgError('NO_API_KEY', 'Supabase não configurado.');
+  const { data, error } = await supabase.functions.invoke('rawg-proxy', { body });
+  if (error) throw new RawgError('BAD_RESPONSE', error.message);
+  return data as T;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

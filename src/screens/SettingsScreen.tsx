@@ -12,6 +12,7 @@ import { rawgSearchGames } from '../api/rawg';
 
 export function SettingsScreen() {
   const { state, actions } = useGameStore();
+  const showRawgKey = __DEV__;
   const [apiKey, setApiKey] = useState(state.settings.rawgApiKey ?? '');
   const [hltbBaseUrl, setHltbBaseUrl] = useState(state.settings.hltbBaseUrl ?? '');
   const [saving, setSaving] = useState(false);
@@ -36,8 +37,10 @@ export function SettingsScreen() {
     setTestResult(undefined);
     setSaving(true);
     try {
-      await actions.setApiKey(apiKey.trim() ? apiKey.trim() : undefined);
       await actions.setHltbBaseUrl(hltbBaseUrl.trim() ? hltbBaseUrl.trim() : undefined);
+      if (showRawgKey) {
+        await actions.setApiKey(apiKey.trim() ? apiKey.trim() : undefined);
+      }
       setTestResult('Salvo no Supabase.');
     } catch {
       setError('Falha ao salvar.');
@@ -49,14 +52,10 @@ export function SettingsScreen() {
   async function onTest() {
     setError(undefined);
     setTestResult(undefined);
-    const key = apiKey.trim();
-    if (!key) {
-      setError('Informe sua RAWG API Key para testar.');
-      return;
-    }
     setTesting(true);
     try {
-      const results = await rawgSearchGames('Hollow Knight', key);
+      const key = apiKey.trim();
+      const results = await rawgSearchGames('Hollow Knight', showRawgKey && key ? key : undefined);
       setTestResult(results.length ? `OK: "${results[0].name}" (top 1 de ${results.length})` : 'OK: sem resultados.');
     } catch (e: any) {
       setError(typeof e?.message === 'string' ? e.message : 'Falha ao testar a API.');
@@ -175,26 +174,30 @@ export function SettingsScreen() {
       </Card>
 
       <Card style={styles.card}>
-        <ThemedText variant="subtitle">RAWG API Key</ThemedText>
+        <ThemedText variant="subtitle">RAWG</ThemedText>
         <ThemedText variant="muted" style={{ marginTop: 8 }}>
-          Necessária para buscar capa, descrição, gêneros e metadados automaticamente.
+          No app publicado, a integração usa um proxy via Supabase (Edge Function), sem expor a chave no app.
         </ThemedText>
 
         <View style={{ height: 14 }} />
 
-        <TextField
-          label="Chave"
-          value={apiKey}
-          onChangeText={(t) => {
-            setApiKey(t);
-            setError(undefined);
-          }}
-          placeholder="Cole sua RAWG API Key aqui"
-          autoCapitalize="none"
-          autoCorrect={false}
-          secureTextEntry={false}
-          error={error}
-        />
+        {showRawgKey ? (
+          <TextField
+            label="Chave (apenas dev)"
+            value={apiKey}
+            onChangeText={(t) => {
+              setApiKey(t);
+              setError(undefined);
+            }}
+            placeholder="Cole sua RAWG API Key aqui"
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry={false}
+            error={error}
+          />
+        ) : (
+          <ThemedText variant="muted">Configurado no servidor.</ThemedText>
+        )}
 
         {testResult ? (
           <ThemedText variant="muted" style={{ marginTop: 10 }}>
