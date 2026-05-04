@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
 function normalizeSupabaseUrl(input: string) {
@@ -16,19 +15,34 @@ function stripRestPath(url: string) {
 const supabaseUrl = stripRestPath(normalizeSupabaseUrl(process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''));
 const supabaseAnonKey = String(process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '').trim();
 
+function createMemoryStorage() {
+  const map = new Map<string, string>();
+  return {
+    getItem: async (key: string) => {
+      return map.has(key) ? map.get(key)! : null;
+    },
+    setItem: async (key: string, value: string) => {
+      map.set(key, value);
+    },
+    removeItem: async (key: string) => {
+      map.delete(key);
+    },
+  };
+}
+
 export const supabase =
   supabaseUrl && supabaseAnonKey
     ? createClient(supabaseUrl, supabaseAnonKey, {
         auth: {
-          storage: AsyncStorage,
+          storage: createMemoryStorage(),
           autoRefreshToken: true,
-          persistSession: true,
+          persistSession: false,
           detectSessionInUrl: false,
         },
       })
     : createClient('http://localhost', 'invalid', {
         auth: {
-          storage: AsyncStorage,
+          storage: createMemoryStorage(),
           autoRefreshToken: false,
           persistSession: false,
           detectSessionInUrl: false,

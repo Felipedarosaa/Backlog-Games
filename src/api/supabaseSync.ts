@@ -56,12 +56,22 @@ type DbAchievementRow = {
 type DbProfileRow = {
   id: string;
   username: string;
+  rawg_api_key?: string | null;
+  hltb_base_url?: string | null;
 };
 
-export async function getProfileUsername(userId: string) {
-  const { data, error } = await supabase.from('profiles').select('username').eq('id', userId).maybeSingle();
+export async function getProfile(userId: string) {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('username, rawg_api_key, hltb_base_url')
+    .eq('id', userId)
+    .maybeSingle();
   if (error) throw error;
-  return typeof (data as any)?.username === 'string' ? String((data as any).username) : undefined;
+  return {
+    username: typeof (data as any)?.username === 'string' ? String((data as any).username) : undefined,
+    rawgApiKey: typeof (data as any)?.rawg_api_key === 'string' ? String((data as any).rawg_api_key) : undefined,
+    hltbBaseUrl: typeof (data as any)?.hltb_base_url === 'string' ? String((data as any).hltb_base_url) : undefined,
+  };
 }
 
 export async function isUsernameAvailable(username: string) {
@@ -73,6 +83,15 @@ export async function isUsernameAvailable(username: string) {
 export async function upsertProfile(userId: string, username: string) {
   const row: DbProfileRow = { id: userId, username };
   const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'id' });
+  if (error) throw error;
+}
+
+export async function updateProfileSettings(userId: string, patch: { rawgApiKey?: string; hltbBaseUrl?: string }) {
+  const row = {
+    rawg_api_key: typeof patch.rawgApiKey === 'string' ? patch.rawgApiKey : null,
+    hltb_base_url: typeof patch.hltbBaseUrl === 'string' ? patch.hltbBaseUrl : null,
+  };
+  const { error } = await supabase.from('profiles').update(row).eq('id', userId);
   if (error) throw error;
 }
 
@@ -327,4 +346,3 @@ export async function applySyncEvent(
     }
   }
 }
-

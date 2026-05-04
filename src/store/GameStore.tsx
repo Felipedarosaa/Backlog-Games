@@ -12,7 +12,6 @@ import type {
   HltbTimes,
   SyncEvent,
 } from '../types/game';
-import { getJson, setJson } from '../storage/jsonStorage';
 import { makeId } from '../utils/id';
 import { nowISO } from '../utils/time';
 import { clampRating } from '../utils/validation';
@@ -22,10 +21,7 @@ import { notifyAchievementUnlocked } from '../notifications/achievementNotificat
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 import { hasSupabaseConfig, supabase } from '../api/supabase';
-import { applySyncEvent, getProfileUsername, isUsernameAvailable, pullAll, upsertProfile } from '../api/supabaseSync';
-
-const STORAGE_KEY_SETTINGS = '@backlog_gamer_settings_v1';
-const STORAGE_KEY_OUTBOX = '@backlog_gamer_outbox_v1';
+import { applySyncEvent, getProfile, isUsernameAvailable, pullAll, updateProfileSettings, upsertProfile } from '../api/supabaseSync';
 
 type Action =
   | { type: 'HYDRATE'; state: AppState }
@@ -278,8 +274,8 @@ type Store = {
       username: string,
     ) => Promise<{ ok: true } | { ok: false; error: string }>;
     signOut: () => Promise<void>;
-    setApiKey: (apiKey: string | undefined) => void;
-    setHltbBaseUrl: (hltbBaseUrl: string | undefined) => void;
+    setApiKey: (apiKey: string | undefined) => Promise<void>;
+    setHltbBaseUrl: (hltbBaseUrl: string | undefined) => Promise<void>;
     addGame: (game: GameEntry) => void;
     deleteGame: (gameId: string) => void;
     setStatus: (gameId: string, status: GameStatus) => void;
@@ -299,7 +295,7 @@ type Store = {
     removeGameFromList: (listId: string, gameId: string) => void;
     unlockAchievements: (unlocks: AchievementUnlock[]) => void;
     clearSyncOutbox: () => void;
-    reset: () => void;
+    reset: () => Promise<void>;
   };
 };
 
@@ -308,7 +304,6 @@ const StoreContext = createContext<Store | undefined>(undefined);
 export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [hydrated, setHydrated] = useState(false);
-  const hasHydratedRef = useRef(false);
   const didInitialAchievementsSyncRef = useRef(false);
   const [isOnline, setIsOnline] = useState<boolean | undefined>(undefined);
   const wasOnlineRef = useRef<boolean | undefined>(undefined);
@@ -316,35 +311,8 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   const flushingOutboxRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const storedSettings = await getJson<Pick<AppState, 'settings'>>(STORAGE_KEY_SETTINGS);
-        const storedOutbox = await getJson<Pick<AppState, 'syncOutbox'>>(STORAGE_KEY_OUTBOX);
-        const next = sanitizeState({ settings: storedSettings?.settings, syncOutbox: storedOutbox?.syncOutbox } as any) ?? initialState;
-        if (!cancelled) {
-          dispatch({ type: 'HYDRATE', state: next });
-          setHydrated(true);
-          hasHydratedRef.current = true;
-        }
-      } catch {
-        if (!cancelled) {
-          dispatch({ type: 'HYDRATE', state: initialState });
-          setHydrated(true);
-          hasHydratedRef.current = true;
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    setHydrated(true);
   }, []);
-
-  useEffect(() => {
-    if (!hasHydratedRef.current) return;
-    setJson(STORAGE_KEY_SETTINGS, { settings: state.settings }).catch(() => {});
-    setJson(STORAGE_KEY_OUTBOX, { syncOutbox: state.syncOutbox }).catch(() => {});
-  }, [state]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -360,9 +328,11 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         try {
-          const profileUsername = await getProfileUsername(base.id);
-          const user = profileUsername ? { ...base, username: profileUsername } : base;
+          const profile = await getProfile(base.id);
+          const user = profile.username ? { ...base, username: profile.username } : base;
           dispatch({ type: 'SET_AUTH_USER', user });
+          dispatch({ type: 'SET_API_KEY', apiKey: profile.rawgApiKey?.trim() || undefined });
+          dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: profile.hltbBaseUrl?.trim() || undefined });
         } catch {
           dispatch({ type: 'SET_AUTH_USER', user: base });
         }
@@ -377,9 +347,11 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           return;
         }
         try {
-          const profileUsername = await getProfileUsername(base.id);
-          const user = profileUsername ? { ...base, username: profileUsername } : base;
+          const profile = await getProfile(base.id);
+          const user = profile.username ? { ...base, username: profile.username } : base;
           dispatch({ type: 'SET_AUTH_USER', user });
+          dispatch({ type: 'SET_API_KEY', apiKey: profile.rawgApiKey?.trim() || undefined });
+          dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: profile.hltbBaseUrl?.trim() || undefined });
         } catch {
           dispatch({ type: 'SET_AUTH_USER', user: base });
         }
@@ -467,7 +439,7 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   }, [hydrated, isOnline, state.auth.currentUser?.id, state.syncOutbox]);
 
   useEffect(() => {
-    if (!hasHydratedRef.current) return;
+    if (!hydrated) return;
     if (isOnline == null) return;
     const prev = wasOnlineRef.current;
     wasOnlineRef.current = isOnline;
@@ -491,7 +463,7 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   }, [isOnline, state]);
 
   useEffect(() => {
-    if (!hasHydratedRef.current) return;
+    if (!hydrated) return;
     const unlockedNow = getUnlockedAchievementIds(state);
     const unlockedAlready = new Set(state.achievementsUnlocked.map((a) => a.id));
     const newlyUnlockedIds = unlockedNow.filter((id) => !unlockedAlready.has(id));
@@ -574,15 +546,17 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           if (!data.session?.user) return { ok: false, error: 'Falha ao criar sessão.' };
           const base = authUserFromSupabaseUser(data.session.user);
           try {
-            const profileUsername = await getProfileUsername(base.id);
-            if (profileUsername) {
-              dispatch({ type: 'SIGN_IN', user: { ...base, username: profileUsername } });
+            const profile = await getProfile(base.id);
+            if (profile.username) {
+              dispatch({ type: 'SIGN_IN', user: { ...base, username: profile.username } });
             } else if (base.username) {
               await upsertProfile(base.id, base.username);
               dispatch({ type: 'SIGN_IN', user: base });
             } else {
               dispatch({ type: 'SIGN_IN', user: base });
             }
+            dispatch({ type: 'SET_API_KEY', apiKey: profile.rawgApiKey?.trim() || undefined });
+            dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: profile.hltbBaseUrl?.trim() || undefined });
           } catch {
             dispatch({ type: 'SIGN_IN', user: base });
           }
@@ -603,9 +577,34 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
             dispatch({ type: 'SIGN_OUT' });
           }
         },
-        setApiKey: (apiKey) => dispatch({ type: 'SET_API_KEY', apiKey: apiKey?.trim() || undefined }),
-        setHltbBaseUrl: (hltbBaseUrl) =>
-          dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: hltbBaseUrl?.trim() || undefined }),
+        setApiKey: async (apiKey) => {
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          const userId = state.auth.currentUser?.id;
+          if (!userId) throw new Error('Usuário não autenticado.');
+          const next = apiKey?.trim() || undefined;
+          const prev = state.settings.rawgApiKey;
+          dispatch({ type: 'SET_API_KEY', apiKey: next });
+          try {
+            await updateProfileSettings(userId, { rawgApiKey: next });
+          } catch {
+            dispatch({ type: 'SET_API_KEY', apiKey: prev });
+            throw new Error('Falha ao salvar no Supabase.');
+          }
+        },
+        setHltbBaseUrl: async (hltbBaseUrl) => {
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          const userId = state.auth.currentUser?.id;
+          if (!userId) throw new Error('Usuário não autenticado.');
+          const next = hltbBaseUrl?.trim() || undefined;
+          const prev = state.settings.hltbBaseUrl;
+          dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: next });
+          try {
+            await updateProfileSettings(userId, { hltbBaseUrl: next });
+          } catch {
+            dispatch({ type: 'SET_HLTB_BASE_URL', hltbBaseUrl: prev });
+            throw new Error('Falha ao salvar no Supabase.');
+          }
+        },
         addGame: (game) => dispatch({ type: 'ADD_GAME', game }),
         deleteGame: (gameId) => dispatch({ type: 'DELETE_GAME', gameId }),
         setStatus: (gameId, status) => dispatch({ type: 'SET_STATUS', gameId, status }),
@@ -632,7 +631,31 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
         removeGameFromList: (listId, gameId) => dispatch({ type: 'REMOVE_GAME_FROM_LIST', listId, gameId }),
         unlockAchievements: (unlocks) => dispatch({ type: 'UNLOCK_ACHIEVEMENTS', unlocks }),
         clearSyncOutbox: () => dispatch({ type: 'CLEAR_SYNC_OUTBOX' }),
-        reset: () => dispatch({ type: 'RESET' }),
+        reset: async () => {
+          if (!hasSupabaseConfig()) throw new Error('Supabase não configurado.');
+          const userId = state.auth.currentUser?.id;
+          if (!userId) throw new Error('Usuário não autenticado.');
+          const { error: e1 } = await supabase.from('list_games').delete().eq('user_id', userId);
+          if (e1) throw e1;
+          const { error: e2 } = await supabase.from('sessions').delete().eq('user_id', userId);
+          if (e2) throw e2;
+          const { error: e3 } = await supabase.from('achievements_unlocked').delete().eq('user_id', userId);
+          if (e3) throw e3;
+          const { error: e4 } = await supabase.from('lists').delete().eq('user_id', userId);
+          if (e4) throw e4;
+          const { error: e5 } = await supabase.from('games').delete().eq('user_id', userId);
+          if (e5) throw e5;
+          dispatch({
+            type: 'HYDRATE',
+            state: {
+              ...state,
+              games: [],
+              lists: [],
+              achievementsUnlocked: [],
+              syncOutbox: [],
+            },
+          });
+        },
       },
     };
   }, [state]);

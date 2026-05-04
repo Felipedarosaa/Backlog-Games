@@ -36,9 +36,9 @@ export function SettingsScreen() {
     setTestResult(undefined);
     setSaving(true);
     try {
-      actions.setApiKey(apiKey.trim() ? apiKey.trim() : undefined);
-      actions.setHltbBaseUrl(hltbBaseUrl.trim() ? hltbBaseUrl.trim() : undefined);
-      setTestResult('Salvo no dispositivo.');
+      await actions.setApiKey(apiKey.trim() ? apiKey.trim() : undefined);
+      await actions.setHltbBaseUrl(hltbBaseUrl.trim() ? hltbBaseUrl.trim() : undefined);
+      setTestResult('Salvo no Supabase.');
     } catch {
       setError('Falha ao salvar.');
     } finally {
@@ -90,9 +90,9 @@ export function SettingsScreen() {
   }
 
   function onReset() {
-    Alert.alert('Limpar dados', 'Apaga todos os jogos e configurações deste app no dispositivo.', [
+    Alert.alert('Apagar dados', 'Apaga os dados da sua conta no Supabase (jogos, listas, sessões e conquistas).', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Apagar', style: 'destructive', onPress: () => actions.reset() },
+      { text: 'Apagar', style: 'destructive', onPress: () => void actions.reset() },
     ]);
   }
 
@@ -215,18 +215,18 @@ export function SettingsScreen() {
       </Card>
 
       <Card style={styles.card}>
-        <ThemedText variant="subtitle">Dados locais</ThemedText>
+        <ThemedText variant="subtitle">Dados no Supabase</ThemedText>
         <ThemedText variant="muted" style={{ marginTop: 8 }}>
-          Persistência local via AsyncStorage.
+          Seus dados ficam armazenados na nuvem e vinculados à sua conta.
         </ThemedText>
         <View style={{ height: 14 }} />
-        <ThemedButton label="LIMPAR TUDO" variant="danger" onPress={onReset} />
+        <ThemedButton label="APAGAR DADOS" variant="danger" onPress={onReset} />
       </Card>
 
       <Card style={styles.card}>
         <ThemedText variant="subtitle">Offline / Sincronização</ThemedText>
         <ThemedText variant="muted" style={{ marginTop: 8 }}>
-          O app registra suas ações localmente e mantém uma fila pronta para sincronizar quando você ativar cloud no futuro.
+          Quando você fica offline, o app segura as alterações em memória e tenta sincronizar assim que voltar a ficar online.
         </ThemedText>
         <View style={{ height: 12 }} />
         <View style={styles.syncRow}>
