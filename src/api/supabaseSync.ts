@@ -75,7 +75,19 @@ export async function getProfile(userId: string) {
 }
 
 export async function isUsernameAvailable(username: string) {
-  const { data, error } = await supabase.from('profiles').select('id').eq('username', username).maybeSingle();
+  const normalized = String(username ?? '').trim();
+  if (!normalized) return false;
+  try {
+    const { data, error } = await supabase.rpc('is_username_available', { p_username: normalized });
+    if (error) throw error;
+    if (typeof data === 'boolean') return data;
+  } catch {
+  }
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id')
+    .ilike('username', normalized)
+    .maybeSingle();
   if (error) throw error;
   return !data;
 }
