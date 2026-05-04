@@ -125,11 +125,6 @@ export function AddGameScreen({ navigation }: Props) {
 
         <View style={styles.actionsRow}>
           <ThemedButton label="BUSCAR" onPress={onSearch} disabled={!canSearch || loading} />
-          <ThemedButton
-            label="CONFIG"
-            variant="secondary"
-            onPress={() => (navigation.getParent() as any)?.navigate('MoreTab', { screen: 'Settings' })}
-          />
         </View>
       </Card>
 
