@@ -190,15 +190,6 @@ export function SettingsScreen() {
       </Card>
 
       <Card style={styles.card}>
-        <ThemedText variant="subtitle">Dados no Supabase</ThemedText>
-        <ThemedText variant="muted" style={{ marginTop: 8 }}>
-          Seus dados ficam armazenados na nuvem e vinculados à sua conta.
-        </ThemedText>
-        <View style={{ height: 14 }} />
-        <ThemedButton label="APAGAR DADOS" variant="danger" onPress={onReset} />
-      </Card>
-
-      <Card style={styles.card}>
         <ThemedText variant="subtitle">Offline / Sincronização</ThemedText>
         <ThemedText variant="muted" style={{ marginTop: 8 }}>
           Quando você fica offline, o app segura as alterações em memória e tenta sincronizar assim que voltar a ficar online.
@@ -232,6 +223,15 @@ export function SettingsScreen() {
           />
           <ThemedButton label="LIMPAR FILA" variant="secondary" onPress={onClearOutbox} disabled={!state.syncOutbox.length} />
         </View>
+      </Card>
+
+      <Card style={styles.card}>
+        <ThemedText variant="subtitle">Dados no Supabase</ThemedText>
+        <ThemedText variant="muted" style={{ marginTop: 8 }}>
+          Seus dados ficam armazenados na nuvem e vinculados à sua conta.
+        </ThemedText>
+        <View style={{ height: 14 }} />
+        <ThemedButton label="APAGAR DADOS" variant="danger" onPress={onReset} />
       </Card>
     </ScrollView>
   );
