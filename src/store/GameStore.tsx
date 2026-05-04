@@ -22,6 +22,7 @@ import { notifyAchievementUnlocked } from '../notifications/achievementNotificat
 import NetInfo from '@react-native-community/netinfo';
 import * as Notifications from 'expo-notifications';
 import { hasSupabaseConfig, supabase } from '../api/supabase';
+import { applySyncEvent, getProfileUsername, isUsernameAvailable, pullAll, seedFromLocal, upsertProfile } from '../api/supabaseSync';
 
 const STORAGE_KEY = '@backlog_gamer_state_v1';
 
@@ -50,6 +51,7 @@ type Action =
   | { type: 'ADD_GAME_TO_LIST'; listId: string; gameId: string }
   | { type: 'REMOVE_GAME_FROM_LIST'; listId: string; gameId: string }
   | { type: 'UNLOCK_ACHIEVEMENTS'; unlocks: AchievementUnlock[] }
+  | { type: 'SET_SYNC_OUTBOX'; outbox: SyncEvent[] }
   | { type: 'CLEAR_SYNC_OUTBOX' }
   | { type: 'RESET' };
 
@@ -127,6 +129,7 @@ function reducer(state: AppState, action: Action): AppState {
         createdAtISO,
         type: 'SESSION_ADD',
         gameId: action.gameId,
+        sessionId: session.id,
         minutes: action.minutes,
         note: action.note?.trim() || undefined,
       });
@@ -182,8 +185,20 @@ function reducer(state: AppState, action: Action): AppState {
       const existing = new Set(state.achievementsUnlocked.map((a) => a.id));
       const toAdd = action.unlocks.filter((u) => !existing.has(u.id));
       if (!toAdd.length) return state;
-      return { ...state, achievementsUnlocked: [...state.achievementsUnlocked, ...toAdd] };
+      let next: AppState = { ...state, achievementsUnlocked: [...state.achievementsUnlocked, ...toAdd] };
+      for (const u of toAdd) {
+        next = enqueueSync(next, {
+          id: makeId('sync'),
+          createdAtISO,
+          type: 'ACHIEVEMENT_UNLOCK',
+          achievementId: u.id,
+          unlockedAtISO: u.unlockedAtISO,
+        });
+      }
+      return next;
     }
+    case 'SET_SYNC_OUTBOX':
+      return { ...state, syncOutbox: action.outbox };
     case 'CLEAR_SYNC_OUTBOX':
       if (!state.syncOutbox.length) return state;
       return { ...state, syncOutbox: [] };
@@ -289,6 +304,8 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   const didInitialAchievementsSyncRef = useRef(false);
   const [isOnline, setIsOnline] = useState<boolean | undefined>(undefined);
   const wasOnlineRef = useRef<boolean | undefined>(undefined);
+  const cloudInitializedForUserRef = useRef<string | undefined>(undefined);
+  const flushingOutboxRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -325,16 +342,38 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     supabase.auth
       .getSession()
-      .then(({ data }) => {
+      .then(async ({ data }) => {
         if (cancelled) return;
-        const user = data.session?.user ? authUserFromSupabaseUser(data.session.user) : undefined;
-        dispatch({ type: 'SET_AUTH_USER', user });
+        const base = data.session?.user ? authUserFromSupabaseUser(data.session.user) : undefined;
+        if (!base) {
+          dispatch({ type: 'SET_AUTH_USER', user: undefined });
+          return;
+        }
+        try {
+          const profileUsername = await getProfileUsername(base.id);
+          const user = profileUsername ? { ...base, username: profileUsername } : base;
+          dispatch({ type: 'SET_AUTH_USER', user });
+        } catch {
+          dispatch({ type: 'SET_AUTH_USER', user: base });
+        }
       })
       .catch(() => {});
 
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      const user = session?.user ? authUserFromSupabaseUser(session.user) : undefined;
-      dispatch({ type: 'SET_AUTH_USER', user });
+      void (async () => {
+        const base = session?.user ? authUserFromSupabaseUser(session.user) : undefined;
+        if (!base) {
+          dispatch({ type: 'SET_AUTH_USER', user: undefined });
+          return;
+        }
+        try {
+          const profileUsername = await getProfileUsername(base.id);
+          const user = profileUsername ? { ...base, username: profileUsername } : base;
+          dispatch({ type: 'SET_AUTH_USER', user });
+        } catch {
+          dispatch({ type: 'SET_AUTH_USER', user: base });
+        }
+      })();
     });
 
     return () => {
@@ -352,6 +391,98 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!hydrated) return;
+    if (isOnline !== true) return;
+    if (!hasSupabaseConfig()) return;
+    const userId = state.auth.currentUser?.id;
+    if (!userId) return;
+    if (cloudInitializedForUserRef.current === userId) return;
+    cloudInitializedForUserRef.current = userId;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const cloud = await pullAll(userId);
+        if (cancelled) return;
+
+        const cloudHasData = Boolean(cloud.games.length || cloud.lists.length || cloud.achievementsUnlocked.length);
+        const localHasData = Boolean(state.games.length || state.lists.length || state.achievementsUnlocked.length);
+        if (!cloudHasData && localHasData) {
+          await seedFromLocal(userId, {
+            games: state.games,
+            lists: state.lists,
+            achievementsUnlocked: state.achievementsUnlocked,
+          });
+          if (cancelled) return;
+          const seeded = await pullAll(userId);
+          if (cancelled) return;
+          dispatch({
+            type: 'HYDRATE',
+            state: {
+              ...state,
+              auth: { ...state.auth, currentUser: state.auth.currentUser },
+              games: seeded.games,
+              lists: seeded.lists,
+              achievementsUnlocked: seeded.achievementsUnlocked,
+              syncOutbox: state.syncOutbox,
+            },
+          });
+          return;
+        }
+
+        dispatch({
+          type: 'HYDRATE',
+          state: {
+            ...state,
+            auth: { ...state.auth, currentUser: state.auth.currentUser },
+            games: cloud.games.length ? cloud.games : state.games,
+            lists: cloud.lists.length ? cloud.lists : state.lists,
+            achievementsUnlocked: cloud.achievementsUnlocked.length ? cloud.achievementsUnlocked : state.achievementsUnlocked,
+            syncOutbox: state.syncOutbox,
+          },
+        });
+      } catch {
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, isOnline, state.auth.currentUser?.id]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (isOnline !== true) return;
+    if (!hasSupabaseConfig()) return;
+    const userId = state.auth.currentUser?.id;
+    if (!userId) return;
+    if (!state.syncOutbox.length) return;
+    if (flushingOutboxRef.current) return;
+    flushingOutboxRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      let remaining = state.syncOutbox;
+      for (let i = 0; i < state.syncOutbox.length; i++) {
+        const e = state.syncOutbox[i];
+        try {
+          const op = cloudOpFromSyncEvent(e, state);
+          if (op) await applySyncEvent(userId, op);
+          remaining = state.syncOutbox.slice(i + 1);
+        } catch {
+          remaining = state.syncOutbox.slice(i);
+          break;
+        }
+      }
+      if (!cancelled) {
+        dispatch({ type: 'SET_SYNC_OUTBOX', outbox: remaining });
+      }
+      flushingOutboxRef.current = false;
+    })();
+    return () => {
+      cancelled = true;
+      flushingOutboxRef.current = false;
+    };
+  }, [hydrated, isOnline, state.auth.currentUser?.id, state.syncOutbox]);
+
+  useEffect(() => {
     if (!hasHydratedRef.current) return;
     if (isOnline == null) return;
     const prev = wasOnlineRef.current;
@@ -366,7 +497,7 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
         Notifications.scheduleNotificationAsync({
           content: {
             title: 'Conexão restaurada',
-            body: `${pending} ações pendentes para sincronizar quando você ativar o cloud.`,
+            body: `${pending} ações pendentes para sincronizar no Supabase.`,
             sound: true,
           },
           trigger: null,
@@ -416,6 +547,13 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           if (pass.length < 6) return { ok: false, error: 'A senha precisa ter pelo menos 6 caracteres.' };
           if (pass !== confirm) return { ok: false, error: 'As senhas não conferem.' };
 
+          try {
+            const ok = await isUsernameAvailable(normalizedUsername);
+            if (!ok) return { ok: false, error: 'Esse nome de usuário já está em uso.' };
+          } catch (e: any) {
+            return { ok: false, error: typeof e?.message === 'string' ? e.message : 'Falha ao validar nome de usuário.' };
+          }
+
           const { data, error } = await supabase.auth.signUp({
             email: normalizedEmail,
             password: pass,
@@ -423,8 +561,20 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           });
           if (error) return { ok: false, error: error.message };
 
+          const newUserId = data.user?.id ?? data.session?.user?.id;
+          if (newUserId) {
+            try {
+              await upsertProfile(newUserId, normalizedUsername);
+            } catch (e: any) {
+              return { ok: false, error: typeof e?.message === 'string' ? e.message : 'Falha ao criar perfil no banco.' };
+            }
+          }
+
           if (data.session?.user) {
-            dispatch({ type: 'SIGN_IN', user: authUserFromSupabaseUser(data.session.user) });
+            dispatch({
+              type: 'SIGN_IN',
+              user: { ...authUserFromSupabaseUser(data.session.user), username: normalizedUsername },
+            });
             return { ok: true };
           }
 
@@ -438,7 +588,20 @@ export function GameStoreProvider({ children }: { children: React.ReactNode }) {
           const { data, error } = await supabase.auth.signInWithPassword({ email: normalizedEmail, password: pass });
           if (error) return { ok: false, error: error.message };
           if (!data.session?.user) return { ok: false, error: 'Falha ao criar sessão.' };
-          dispatch({ type: 'SIGN_IN', user: authUserFromSupabaseUser(data.session.user) });
+          const base = authUserFromSupabaseUser(data.session.user);
+          try {
+            const profileUsername = await getProfileUsername(base.id);
+            if (profileUsername) {
+              dispatch({ type: 'SIGN_IN', user: { ...base, username: profileUsername } });
+            } else if (base.username) {
+              await upsertProfile(base.id, base.username);
+              dispatch({ type: 'SIGN_IN', user: base });
+            } else {
+              dispatch({ type: 'SIGN_IN', user: base });
+            }
+          } catch {
+            dispatch({ type: 'SIGN_IN', user: base });
+          }
           return { ok: true };
         },
         signInWithProvider: async (provider) => {
@@ -539,8 +702,62 @@ function fallbackUsernameFromEmail(email: string) {
   return cleaned.length >= 3 ? cleaned : 'user';
 }
 
+function cloudOpFromSyncEvent(event: SyncEvent, state: AppState) {
+  switch (event.type) {
+    case 'GAME_ADD':
+      return { type: 'GAME_UPSERT' as const, game: event.game };
+    case 'GAME_UPDATE': {
+      const game = state.games.find((g) => g.id === event.gameId);
+      if (!game) return null;
+      return { type: 'GAME_UPSERT' as const, game };
+    }
+    case 'GAME_DELETE':
+      return { type: 'GAME_DELETE' as const, gameId: event.gameId };
+    case 'LIST_CREATE':
+      return { type: 'LIST_UPSERT' as const, list: event.list };
+    case 'LIST_UPDATE': {
+      const list = state.lists.find((l) => l.id === event.listId);
+      if (!list) return null;
+      return { type: 'LIST_UPSERT' as const, list };
+    }
+    case 'LIST_DELETE':
+      return { type: 'LIST_DELETE' as const, listId: event.listId };
+    case 'LIST_ADD_GAME':
+    case 'LIST_REMOVE_GAME': {
+      const list = state.lists.find((l) => l.id === event.listId);
+      if (!list) return null;
+      return { type: 'LIST_SET_GAMES' as const, list };
+    }
+    case 'SESSION_ADD': {
+      const game = state.games.find((g) => g.id === event.gameId);
+      const rawSessionId = (event as any).sessionId;
+      const sessionId = typeof rawSessionId === 'string' ? rawSessionId : undefined;
+      const session =
+        (sessionId ? game?.sessions.find((s) => s.id === sessionId) : undefined) ??
+        game?.sessions.find((s) => s.createdAtISO === event.createdAtISO && s.minutes === event.minutes && (s.note ?? '') === (event.note ?? ''));
+      if (!game || !session) return null;
+      return { type: 'SESSION_UPSERT' as const, gameId: game.id, session };
+    }
+    case 'SESSION_DELETE':
+      return { type: 'SESSION_DELETE' as const, gameId: event.gameId, sessionId: event.sessionId };
+    case 'ACHIEVEMENT_UNLOCK':
+      return { type: 'ACHIEVEMENT_UPSERT' as const, unlock: { id: event.achievementId, unlockedAtISO: event.unlockedAtISO } };
+  }
+}
+
 function sanitizeState(state: AppState | undefined) {
   if (!state) return undefined;
+
+  const cu = (state as any)?.auth?.currentUser;
+  const currentUser =
+    cu && typeof cu === 'object' && typeof cu.id === 'string' && typeof cu.username === 'string' && cu.username.trim()
+      ? ({
+          id: String(cu.id),
+          provider: normalizeStoredProvider((cu as any).provider),
+          username: String(cu.username).trim(),
+          email: typeof (cu as any).email === 'string' ? String((cu as any).email) : undefined,
+        } satisfies AuthUser)
+      : undefined;
 
   const games = Array.isArray(state.games) ? state.games : [];
   const safeGames = games
@@ -592,7 +809,7 @@ function sanitizeState(state: AppState | undefined) {
   return {
     auth: {
       accounts: [],
-      currentUser: undefined,
+      currentUser,
     },
     settings: { ...(state.settings ?? {}), rawgApiKey, hltbBaseUrl },
     games: safeGames,
@@ -600,6 +817,18 @@ function sanitizeState(state: AppState | undefined) {
     achievementsUnlocked,
     syncOutbox,
   };
+}
+
+function normalizeStoredProvider(provider: unknown): AuthUser['provider'] {
+  switch (provider) {
+    case 'email':
+    case 'google':
+    case 'psn':
+    case 'steam':
+      return provider;
+    default:
+      return 'email';
+  }
 }
 
 function normalizeEmail(email: string) {

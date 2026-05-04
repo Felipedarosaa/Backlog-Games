@@ -93,13 +93,14 @@ export type SyncEvent =
       gameId: string;
       patch: Record<string, unknown>;
     }
-  | { id: string; createdAtISO: string; type: 'SESSION_ADD'; gameId: string; minutes: number; note?: string }
+  | { id: string; createdAtISO: string; type: 'SESSION_ADD'; gameId: string; sessionId: string; minutes: number; note?: string }
   | { id: string; createdAtISO: string; type: 'SESSION_DELETE'; gameId: string; sessionId: string }
   | { id: string; createdAtISO: string; type: 'LIST_CREATE'; list: GameList }
   | { id: string; createdAtISO: string; type: 'LIST_UPDATE'; listId: string; patch: Record<string, unknown> }
   | { id: string; createdAtISO: string; type: 'LIST_DELETE'; listId: string }
   | { id: string; createdAtISO: string; type: 'LIST_ADD_GAME'; listId: string; gameId: string }
-  | { id: string; createdAtISO: string; type: 'LIST_REMOVE_GAME'; listId: string; gameId: string };
+  | { id: string; createdAtISO: string; type: 'LIST_REMOVE_GAME'; listId: string; gameId: string }
+  | { id: string; createdAtISO: string; type: 'ACHIEVEMENT_UNLOCK'; achievementId: string; unlockedAtISO: string };
 
 export type AppState = {
   auth: AuthState;
